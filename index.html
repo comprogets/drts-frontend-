@@ -49,6 +49,12 @@ label{display:block;font-size:13px;color:var(--muted);margin-bottom:6px;font-wei
 .toast{background:#fff;padding:12px 16px;border-radius:10px;box-shadow:0 10px 26px rgba(11,33,64,0.14);border-left:5px solid var(--navy);min-width:230px;font-size:14px}
 .toast.success{border-left-color:var(--success)}
 .toast.error{border-left-color:var(--danger)}
+.toast.notif{min-width:280px;max-width:340px;padding:14px 16px;position:relative;cursor:pointer;transition:transform .15s ease}
+.toast.notif:hover{transform:translateY(-2px)}
+.toast.notif .notif-title{font-weight:700;font-size:14px;margin-bottom:4px;padding-right:18px}
+.toast.notif .notif-body{font-size:13px;color:#445; line-height:1.4}
+.toast.notif .notif-close{position:absolute;top:8px;right:10px;background:none;border:0;font-size:15px;line-height:1;color:#99a;cursor:pointer;padding:2px}
+.toast.notif .notif-close:hover{color:#556}
 
 /* ---------- Landing ---------- */
 .navbar{display:flex;align-items:center;justify-content:space-between;padding:16px 48px;border-bottom:1px solid var(--border);background:#fff;position:sticky;top:0;z-index:50}
@@ -882,6 +888,24 @@ function showToast(msg,type){
   t.className='toast '+(type||''); t.innerText=msg; c.appendChild(t);
   setTimeout(()=>{t.style.opacity='0'},3000); setTimeout(()=>{if(t.parentNode)c.removeChild(t)},3500);
 }
+// A more prominent, longer-lived pop-up for actual incoming updates (a status change, a new
+// message/response) — separate from the small showToast() used for immediate action feedback
+// (e.g. "Saved"). Shows in-app every time, with no browser permission required, so it's a
+// reliable complement to the OS-level notifyDevice()/sound, which some browsers or devices may
+// block or suppress. Clicking it (or the × button) dismisses it early; otherwise it auto-hides.
+function showNotifPopup(title, body, onClick){
+  const c=_('toastContainer'); const t=document.createElement('div');
+  t.className='toast notif';
+  t.innerHTML = `<button class="notif-close" aria-label="Dismiss">&times;</button>
+    <div class="notif-title">${escapeHtml(title)}</div>
+    <div class="notif-body">${escapeHtml(body)}</div>`;
+  const dismiss=()=>{ t.style.opacity='0'; setTimeout(()=>{if(t.parentNode)c.removeChild(t)},300); };
+  t.querySelector('.notif-close').onclick=(e)=>{ e.stopPropagation(); dismiss(); };
+  t.onclick=()=>{ if(onClick) onClick(); dismiss(); };
+  c.appendChild(t);
+  playNotifSound();
+  setTimeout(dismiss, 7000);
+}
 function _(id){return document.getElementById(id);}
 function statusToken(s){return String(s||'').replace(/\s+/g,'').replace(/\//g,'');}
 function togglePassword(id){
@@ -1242,7 +1266,6 @@ function buildSidebar(user){
       ...(user.role==='Accounting' ? [['adminPayments','fa-sack-dollar','Payments']] : []),
       ['adminNotifications','fa-bell','Notifications'],
       ['adminReports','fa-folder','Monthly Reports'],
-      ['adminSms','fa-bell','System Notifications'],
       ['adminUtilities','fa-gear','Utilities'],
       ['adminRequestHistory','fa-clock-rotate-left','Request History']
     ]
@@ -1380,6 +1403,29 @@ function ensureNotifPermission(){
   if(!('Notification' in window)) return;
   if(Notification.permission==='default'){ Notification.requestPermission().catch(()=>{}); }
 }
+// Short two-tone chime, synthesized on the fly (no audio file needed). Browsers require a
+// prior user gesture before audio can play; since the AudioContext is created lazily here
+// (not at page load), the login click/tap earlier in the session normally satisfies that,
+// so this is best-effort just like the OS notification itself — a missed chime never blocks
+// or breaks anything else.
+let _notifAudioCtx=null;
+function playNotifSound(){
+  try{
+    if(!_notifAudioCtx) _notifAudioCtx=new (window.AudioContext||window.webkitAudioContext)();
+    const ctx=_notifAudioCtx;
+    if(ctx.state==='suspended') ctx.resume().catch(()=>{});
+    const now=ctx.currentTime;
+    [[880,now,0.14],[1180,now+0.12,0.16]].forEach(([freq,start,dur])=>{
+      const osc=ctx.createOscillator(), gain=ctx.createGain();
+      osc.type='sine'; osc.frequency.value=freq;
+      gain.gain.setValueAtTime(0.0001,start);
+      gain.gain.exponentialRampToValueAtTime(0.18,start+0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001,start+dur);
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(start); osc.stop(start+dur+0.02);
+    });
+  }catch(e){ /* sound is best-effort, never blocks a notification */ }
+}
 function notifyDevice(title,body,tag){
   try{
     if(!('Notification' in window)) return;
@@ -1402,7 +1448,9 @@ function pollDeviceNotifications(){
     (db.deptNotifications||[]).filter(n=>n.dept===dept && !n.read).forEach(n=>{
       if(!deviceNotifiedIds.has(n.id)){
         deviceNotifiedIds.add(n.id);
-        notifyDevice((n.system?'System Alert · ':'New message · ')+dept, n.message, n.id);
+        const title=(n.system?'System Alert · ':'New message · ')+dept;
+        notifyDevice(title, n.message, n.id);
+        showNotifPopup(title, n.message, ()=>navPanel('adminManage'));
       }
     });
   } else {
@@ -1411,7 +1459,10 @@ function pollDeviceNotifications(){
       const key=r.id+'_'+h.when;
       if(new Date(h.when).getTime()>lastSeen && !deviceNotifiedIds.has(key)){
         deviceNotifiedIds.add(key);
-        notifyDevice('Update on '+r.id, docsLabel(r)+' — '+h.status, key);
+        const title='Update on '+r.id;
+        const body=docsLabel(r)+' — '+h.status;
+        notifyDevice(title, body, key);
+        showNotifPopup(title, body, ()=>navPanel('myrequests'));
       }
     }));
   }
