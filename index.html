@@ -4470,16 +4470,11 @@ async function clearNotifyLog(){
   // tab is open. Requires being served over HTTPS or localhost; sw.js must sit next to this file.
   if('serviceWorker' in navigator){ navigator.serviceWorker.register('sw.js').catch(()=>{}); }
   getDB(); ensureInitialSyncDone(); setRegRole('Student'); setAdminLoginRole('Registrar');
-  // One-time password reset: clears any custom AR Code the Registrar account had set,
-  // so login falls back to the ADMIN_ACCOUNTS default (registrar2025) above. Guarded by
-  // a flag so this only runs once and won't undo a password change made after today.
-  (function resetRegistrarPasswordOnce(){
-    const FLAG='nst_registrar_pw_reset_20260922';
-    if(localStorage.getItem(FLAG)) return;
-    const db=getDB();
-    if(db.adminAr){ delete db.adminAr['registrar@nst.edu.ph']; saveDB(db); }
-    localStorage.setItem(FLAG,'1');
-  })();
+  // NOTE: a former one-time "reset the Registrar's AR code" routine used to run here, gated by
+  // a flag stored in localStorage. That's unsafe with a synced backend: clearing a device's
+  // site data also clears the flag, and the routine ran again with the not-yet-synced (empty)
+  // local db, pushing that emptiness to the shared backend and wiping every device's data.
+  // The migration already had time to apply everywhere it needed to - removed for good.
   const cur=getCurrentUser();
   if(cur){
     enterShell();
